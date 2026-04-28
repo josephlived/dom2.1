@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import time
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -238,19 +238,30 @@ def _follow_rdap_registrar_referral(
 ) -> tuple[dict | None, str]:
     """Query the registrar's RDAP server. Returns (payload_or_none, error_message)."""
     last_error = ""
-    for attempt in range(2):
-        try:
-            response = session.get(referral_url, timeout=REQUEST_TIMEOUT_SECONDS)
-            response.raise_for_status()
-            return response.json(), ""
-        except requests.exceptions.Timeout:
-            last_error = "timeout"
-        except requests.RequestException as exc:
-            last_error = exc.__class__.__name__
-        except ValueError:
-            return None, "unreadable JSON"
-        if attempt == 0:
-            time.sleep(0.5)
+    parsed = urlparse(referral_url)
+    lowercase_url = urlunparse(parsed._replace(path=parsed.path.lower()))
+    urls = [referral_url]
+    if lowercase_url != referral_url:
+        urls.append(lowercase_url)
+
+    for url in urls:
+        for attempt in range(2):
+            try:
+                response = session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
+                response.raise_for_status()
+                return response.json(), ""
+            except requests.exceptions.Timeout:
+                last_error = f"timeout at {url}"
+            except requests.exceptions.HTTPError as exc:
+                status_code = exc.response.status_code if exc.response is not None else "unknown"
+                last_error = f"HTTPError {status_code} at {url}"
+                break
+            except requests.RequestException as exc:
+                last_error = f"{exc.__class__.__name__} at {url}"
+            except ValueError:
+                return None, f"unreadable JSON at {url}"
+            if attempt == 0:
+                time.sleep(0.5)
     return None, last_error
 
 
